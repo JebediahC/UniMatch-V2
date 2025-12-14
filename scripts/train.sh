@@ -8,7 +8,7 @@
 dataset='coco'
 method='unimatch_v2'
 exp='dinov2_small'
-split='1_32'
+split='custom_small'
 
 config=configs/${dataset}.yaml
 labeled_id_path=splits/$dataset/$split/labeled.txt
