@@ -1,6 +1,6 @@
 # arguments for dataset
 dataset: coco
-data_root: cooc-2017
+data_root: coco-2017
 nclass: 81
 crop_size: 518
 
