@@ -1,12 +1,12 @@
 # arguments for dataset
 dataset: coco
-data_root: Your/COCO/Path
+data_root: cooc-2017
 nclass: 81
 crop_size: 518
 
 # arguments for training
 epochs: 20
-batch_size: 4 # per GPU x 4 GPUs
+batch_size: 2 # per GPU x 4 GPUs
 lr: 0.000005
 lr_multi: 40.0
 criterion:
