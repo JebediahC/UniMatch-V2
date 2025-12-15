@@ -38,17 +38,19 @@ def evaluate(model, loader, mode, cfg, multiplier=None):
     assert mode in ['original', 'center_crop', 'sliding_window']
     intersection_meter = AverageMeter()
     union_meter = AverageMeter()
+    target_meter = AverageMeter()
+    pred_meter = AverageMeter()
 
     with torch.no_grad():
         for img, mask, id in loader:
-            
+
             img = img.cuda()
-                
+
             if mode == 'sliding_window':
                 grid = cfg['crop_size']
                 b, _, h, w = img.shape
                 final = torch.zeros(b, 19, h, w).cuda()
-                
+
                 row = 0
                 while row < h:
                     col = 0
@@ -61,12 +63,12 @@ def evaluate(model, loader, mode, cfg, multiplier=None):
                     if row == h - grid:
                         break
                     row = min(row + int(grid * 2 / 3), h - grid)
-                    
+
                 pred = final
-            
+
             else:
                 assert mode == 'original'
-                
+
                 if multiplier is not None:
                     ori_h, ori_w = img.shape[-2:]
                     if multiplier == 512:
@@ -74,12 +76,12 @@ def evaluate(model, loader, mode, cfg, multiplier=None):
                     else:
                         new_h, new_w = int(ori_h / multiplier + 0.5) * multiplier, int(ori_w / multiplier + 0.5) * multiplier
                     img = F.interpolate(img, (new_h, new_w), mode='bilinear', align_corners=True)
-                
+
                 pred = model(img)
-            
+
                 if multiplier is not None:
                     pred = F.interpolate(pred, (ori_h, ori_w), mode='bilinear', align_corners=True)
-            
+
             pred = pred.argmax(dim=1)
 
             intersection, union, target = \
@@ -95,11 +97,33 @@ def evaluate(model, loader, mode, cfg, multiplier=None):
 
             intersection_meter.update(reduced_intersection.cpu().numpy())
             union_meter.update(reduced_union.cpu().numpy())
+            target_meter.update(reduced_target.cpu().numpy())
+
+            # Calculate predicted positives per class
+            pred_positives = np.bincount(pred.cpu().numpy().flatten(), minlength=cfg['nclass'])
+            reduced_pred = torch.from_numpy(pred_positives).cuda()
+            dist.all_reduce(reduced_pred)
+            pred_meter.update(reduced_pred.cpu().numpy())
 
     iou_class = intersection_meter.sum / (union_meter.sum + 1e-10) * 100.0
     mIOU = np.mean(iou_class)
 
-    return mIOU, iou_class
+    # Calculate Precision, Recall, F1-Score per class
+    precision_class = intersection_meter.sum / (pred_meter.sum + 1e-10) * 100.0
+    recall_class = intersection_meter.sum / (target_meter.sum + 1e-10) * 100.0
+    f1_class = 2 * (precision_class * recall_class) / (precision_class + recall_class + 1e-10)
+
+    # Calculate mean metrics
+    mPrecision = np.mean(precision_class)
+    mRecall = np.mean(recall_class)
+    mF1 = np.mean(f1_class)
+
+    # Calculate Overall Accuracy (OA)
+    total_correct = np.sum(intersection_meter.sum)
+    total_pixels = np.sum(target_meter.sum)
+    OA = total_correct / (total_pixels + 1e-10) * 100.0
+
+    return mIOU, iou_class, mPrecision, precision_class, mRecall, recall_class, mF1, f1_class, OA
 
 
 def main():
@@ -113,15 +137,15 @@ def main():
     rank, world_size = setup_distributed(port=args.port)
 
     cfg['batch_size'] *= 2
-    
+
     if rank == 0:
         all_args = {**cfg, **vars(args), 'ngpus': world_size}
         logger.info('{}\n'.format(pprint.pformat(all_args)))
-        
+
         writer = SummaryWriter(args.save_path)
-        
+
         os.makedirs(args.save_path, exist_ok=True)
-    
+
     cudnn.enabled = True
     cudnn.benchmark = True
 
@@ -132,42 +156,42 @@ def main():
         'giant': {'encoder_size': 'giant', 'features': 384, 'out_channels': [1536, 1536, 1536, 1536]}
     }
     model = DPT(**{**model_configs[cfg['backbone'].split('_')[-1]], 'nclass': cfg['nclass']})
-    
+
     state_dict = torch.load(f'./pretrained/{cfg["backbone"]}.pth')
     model.backbone.load_state_dict(state_dict)
-    
+
     if cfg['lock_backbone']:
         model.lock_backbone()
-    
+
     optimizer = AdamW(
         [
             {'params': [p for p in model.backbone.parameters() if p.requires_grad], 'lr': cfg['lr']},
             {'params': [param for name, param in model.named_parameters() if 'backbone' not in name], 'lr': cfg['lr'] * cfg['lr_multi']}
-        ], 
+        ],
         lr=cfg['lr'], betas=(0.9, 0.999), weight_decay=0.01
     )
-    
+
     if rank == 0:
         logger.info('Total params: {:.1f}M\n'.format(count_params(model)))
-    
+
     local_rank = int(os.environ["LOCAL_RANK"])
     model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
     model.cuda(local_rank)
     model = torch.nn.parallel.DistributedDataParallel(
         model, device_ids=[local_rank], broadcast_buffers=False, output_device=local_rank, find_unused_parameters=True
     )
-    
+
     if cfg['criterion']['name'] == 'CELoss':
         criterion = nn.CrossEntropyLoss(**cfg['criterion']['kwargs']).cuda(local_rank)
     elif cfg['criterion']['name'] == 'OHEM':
         criterion = ProbOhemCrossEntropy2d(**cfg['criterion']['kwargs']).cuda(local_rank)
     else:
         raise NotImplementedError('%s criterion is not implemented' % cfg['criterion']['name'])
-    
+
     n_upsampled = {
-        'pascal': 3000, 
-        'cityscapes': 3000, 
-        'ade20k': 6000, 
+        'pascal': 3000,
+        'cityscapes': 3000,
+        'ade20k': 6000,
         'coco': 30000
     }
     trainset = SemiDataset(
@@ -176,32 +200,32 @@ def main():
     valset = SemiDataset(
         cfg['dataset'], cfg['data_root'], 'val'
     )
-    
+
     trainsampler = torch.utils.data.distributed.DistributedSampler(trainset)
     trainloader = DataLoader(
         trainset, batch_size=cfg['batch_size'], pin_memory=True, num_workers=4, drop_last=True, sampler=trainsampler
     )
-    
+
     valsampler = torch.utils.data.distributed.DistributedSampler(valset)
     valloader = DataLoader(
         valset, batch_size=1, pin_memory=True, num_workers=1, drop_last=False, sampler=valsampler
     )
-    
+
     iters = 0
     total_iters = len(trainloader) * cfg['epochs']
     previous_best = 0.0
     epoch = -1
-    
+
     if os.path.exists(os.path.join(args.save_path, 'latest.pth')):
         checkpoint = torch.load(os.path.join(args.save_path, 'latest.pth'), map_location='cpu')
         model.load_state_dict(checkpoint['model'])
         optimizer.load_state_dict(checkpoint['optimizer'])
         epoch = checkpoint['epoch']
         previous_best = checkpoint['previous_best']
-        
+
         if rank == 0:
             logger.info('************ Load from checkpoint at epoch %i\n' % epoch)
-    
+
     for epoch in range(epoch + 1, cfg['epochs']):
         if rank == 0:
             logger.info('===========> Epoch: {:}, LR: {:.7f}, Previous best: {:.2f}'.format(
@@ -219,7 +243,7 @@ def main():
             pred = model(img)
 
             loss = criterion(pred, mask)
-            
+
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -230,27 +254,37 @@ def main():
             lr = cfg['lr'] * (1 - iters / total_iters) ** 0.9
             optimizer.param_groups[0]["lr"] = lr
             optimizer.param_groups[1]["lr"] = lr * cfg['lr_multi']
-            
+
             if rank == 0:
                 writer.add_scalar('train/loss_all', loss.item(), iters)
                 writer.add_scalar('train/loss_x', loss.item(), iters)
-            
+
             if (i % (len(trainloader) // 8) == 0) and (rank == 0):
                 logger.info('Iters: {:}, Total loss: {:.3f}'.format(i, total_loss.avg))
-        
+
         eval_mode = 'sliding_window' if cfg['dataset'] == 'cityscapes' else 'original'
-        mIoU, iou_class = evaluate(model, valloader, eval_mode, cfg, multiplier=14)
-        
+        mIoU, iou_class, mPrecision, precision_class, mRecall, recall_class, mF1, f1_class, OA = evaluate(model, valloader, eval_mode, cfg, multiplier=14)
+
         if rank == 0:
             for (cls_idx, iou) in enumerate(iou_class):
                 logger.info('***** Evaluation ***** >>>> Class [{:} {:}] '
-                            'IoU: {:.2f}'.format(cls_idx, CLASSES[cfg['dataset']][cls_idx], iou))
-            logger.info('***** Evaluation {} ***** >>>> MeanIoU: {:.2f}\n'.format(eval_mode, mIoU))
-            
+                            'IoU: {:.2f}, Precision: {:.2f}, Recall: {:.2f}, F1: {:.2f}'.format(
+                                cls_idx, CLASSES[cfg['dataset']][cls_idx], iou,
+                                precision_class[cls_idx], recall_class[cls_idx], f1_class[cls_idx]))
+            logger.info('***** Evaluation {} ***** >>>> MeanIoU: {:.2f}, mPrecision: {:.2f}, mRecall: {:.2f}, mF1: {:.2f}, OA: {:.2f}\n'.format(
+                eval_mode, mIoU, mPrecision, mRecall, mF1, OA))
+
             writer.add_scalar('eval/mIoU', mIoU, epoch)
+            writer.add_scalar('eval/mPrecision', mPrecision, epoch)
+            writer.add_scalar('eval/mRecall', mRecall, epoch)
+            writer.add_scalar('eval/mF1', mF1, epoch)
+            writer.add_scalar('eval/OA', OA, epoch)
             for i, iou in enumerate(iou_class):
                 writer.add_scalar('eval/%s_IoU' % (CLASSES[cfg['dataset']][i]), iou, epoch)
-        
+                writer.add_scalar('eval/%s_Precision' % (CLASSES[cfg['dataset']][i]), precision_class[i], epoch)
+                writer.add_scalar('eval/%s_Recall' % (CLASSES[cfg['dataset']][i]), recall_class[i], epoch)
+                writer.add_scalar('eval/%s_F1' % (CLASSES[cfg['dataset']][i]), f1_class[i], epoch)
+
         is_best = mIoU > previous_best
         previous_best = max(mIoU, previous_best)
         if rank == 0:

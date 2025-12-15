@@ -1,0 +1,1 @@
+Train/image/Lanzhou_319.tif Train/label/Lanzhou_319.tif

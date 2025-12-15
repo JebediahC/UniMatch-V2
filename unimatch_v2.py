@@ -237,20 +237,42 @@ def main():
                                             total_loss_s.avg, total_mask_ratio.avg))
         
         eval_mode = 'sliding_window' if cfg['dataset'] == 'cityscapes' else 'original'
-        mIoU, iou_class = evaluate(model, valloader, eval_mode, cfg, multiplier=14)
-        mIoU_ema, iou_class_ema = evaluate(model_ema, valloader, eval_mode, cfg, multiplier=14)
+        mIoU, iou_class, mPrecision, precision_class, mRecall, recall_class, mF1, f1_class, OA = evaluate(model, valloader, eval_mode, cfg, multiplier=14)
+        mIoU_ema, iou_class_ema, mPrecision_ema, precision_class_ema, mRecall_ema, recall_class_ema, mF1_ema, f1_class_ema, OA_ema = evaluate(model_ema, valloader, eval_mode, cfg, multiplier=14)
         
         if rank == 0:
             for (cls_idx, iou) in enumerate(iou_class):
-                logger.info('***** Evaluation ***** >>>> Class [{:} {:}] IoU: {:.2f}, '
-                            'EMA: {:.2f}'.format(cls_idx, CLASSES[cfg['dataset']][cls_idx], iou, iou_class_ema[cls_idx]))
-            logger.info('***** Evaluation {} ***** >>>> MeanIoU: {:.2f}, EMA: {:.2f}\n'.format(eval_mode, mIoU, mIoU_ema))
+                logger.info('***** Evaluation ***** >>>> Class [{:} {:}] IoU: {:.2f}/{:.2f}, Precision: {:.2f}/{:.2f}, '
+                            'Recall: {:.2f}/{:.2f}, F1: {:.2f}/{:.2f}'.format(
+                                cls_idx, CLASSES[cfg['dataset']][cls_idx], 
+                                iou, iou_class_ema[cls_idx],
+                                precision_class[cls_idx], precision_class_ema[cls_idx],
+                                recall_class[cls_idx], recall_class_ema[cls_idx],
+                                f1_class[cls_idx], f1_class_ema[cls_idx]))
+            logger.info('***** Evaluation {} ***** >>>> MeanIoU: {:.2f}/{:.2f}, mPrecision: {:.2f}/{:.2f}, '
+                        'mRecall: {:.2f}/{:.2f}, mF1: {:.2f}/{:.2f}, OA: {:.2f}/{:.2f}\n'.format(
+                            eval_mode, mIoU, mIoU_ema, mPrecision, mPrecision_ema, 
+                            mRecall, mRecall_ema, mF1, mF1_ema, OA, OA_ema))
             
             writer.add_scalar('eval/mIoU', mIoU, epoch)
             writer.add_scalar('eval/mIoU_ema', mIoU_ema, epoch)
+            writer.add_scalar('eval/mPrecision', mPrecision, epoch)
+            writer.add_scalar('eval/mPrecision_ema', mPrecision_ema, epoch)
+            writer.add_scalar('eval/mRecall', mRecall, epoch)
+            writer.add_scalar('eval/mRecall_ema', mRecall_ema, epoch)
+            writer.add_scalar('eval/mF1', mF1, epoch)
+            writer.add_scalar('eval/mF1_ema', mF1_ema, epoch)
+            writer.add_scalar('eval/OA', OA, epoch)
+            writer.add_scalar('eval/OA_ema', OA_ema, epoch)
             for i, iou in enumerate(iou_class):
                 writer.add_scalar('eval/%s_IoU' % (CLASSES[cfg['dataset']][i]), iou, epoch)
                 writer.add_scalar('eval/%s_IoU_ema' % (CLASSES[cfg['dataset']][i]), iou_class_ema[i], epoch)
+                writer.add_scalar('eval/%s_Precision' % (CLASSES[cfg['dataset']][i]), precision_class[i], epoch)
+                writer.add_scalar('eval/%s_Precision_ema' % (CLASSES[cfg['dataset']][i]), precision_class_ema[i], epoch)
+                writer.add_scalar('eval/%s_Recall' % (CLASSES[cfg['dataset']][i]), recall_class[i], epoch)
+                writer.add_scalar('eval/%s_Recall_ema' % (CLASSES[cfg['dataset']][i]), recall_class_ema[i], epoch)
+                writer.add_scalar('eval/%s_F1' % (CLASSES[cfg['dataset']][i]), f1_class[i], epoch)
+                writer.add_scalar('eval/%s_F1_ema' % (CLASSES[cfg['dataset']][i]), f1_class_ema[i], epoch)
 
         is_best = mIoU >= previous_best
         

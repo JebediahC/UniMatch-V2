@@ -5,9 +5,9 @@
 # method: ['unimatch_v2', 'fixmatch', 'supervised']
 # exp: just for specifying the 'save_path'
 # split: ['92', '1_16', ...]. Please check directory './splits/$dataset' for concrete splits
-dataset='coco'
+dataset='gf7-building'
 method='unimatch_v2'
-exp='dinov2_small'
+exp='dinov2_base'
 split='custom_small'
 
 config=configs/${dataset}.yaml
