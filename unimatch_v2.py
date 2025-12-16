@@ -231,7 +231,8 @@ def main():
                 writer.add_scalar('train/loss_s', loss_u_s.item(), iters)
                 writer.add_scalar('train/mask_ratio', mask_ratio, iters)
 
-            if (i % (len(trainloader_u) // 8) == 0) and (rank == 0):
+            log_interval = max(1, len(trainloader_u) // 8)
+            if (i % log_interval == 0) and (rank == 0):
                 logger.info('Iters: {:}, LR: {:.7f}, Total loss: {:.3f}, Loss x: {:.3f}, Loss s: {:.3f}, Mask ratio: '
                             '{:.3f}'.format(i, optimizer.param_groups[0]['lr'], total_loss.avg, total_loss_x.avg, 
                                             total_loss_s.avg, total_mask_ratio.avg))
