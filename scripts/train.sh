@@ -8,7 +8,7 @@
 dataset='gf7-building'
 method='unimatch_v2'
 exp='dinov2_base'
-split='small_1_32'
+split=${SPLIT:-'1_32'}
 
 config=configs/${dataset}.yaml
 labeled_id_path=splits/$dataset/$split/labeled.txt
