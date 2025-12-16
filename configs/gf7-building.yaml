@@ -1,8 +1,8 @@
 # arguments for dataset
 dataset: gf7-building
-data_root: gf-7-building-4bands
+data_root: gf7-building # link to directories of real data path berfore using it
 nclass: 2
-crop_size: 512
+crop_size: 518
 
 # arguments for training
 epochs: 60

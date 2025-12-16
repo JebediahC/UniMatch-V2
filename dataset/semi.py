@@ -35,7 +35,11 @@ class SemiDataset(Dataset):
         if self.mode == 'train_u':
             mask = Image.fromarray(np.zeros((img.size[1], img.size[0]), dtype=np.uint8))
         else:
-            mask = Image.fromarray(np.array(Image.open(os.path.join(self.root, id.split(' ')[1])))) 
+            mask_array = np.array(Image.open(os.path.join(self.root, id.split(' ')[1])))
+            # Convert 255 to 1 for binary segmentation (0=background, 1=building)
+            # Keep 255 only as ignore_index for padding areas
+            mask_array = np.where(mask_array == 255, 1, mask_array)
+            mask = Image.fromarray(mask_array) 
         
         if self.mode == 'val':
             img, mask = normalize(img, mask)
